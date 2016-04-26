@@ -1,0 +1,8 @@
+{
+  "name": "STIB-MIVB API",
+  "description": "API for STIB-MIVB.",
+  "image": "heroku/python",
+  "repository": "https://github.com/aureooms/stib-mivb-api",
+  "keywords": [ ],
+  "addons": [ ]
+}
