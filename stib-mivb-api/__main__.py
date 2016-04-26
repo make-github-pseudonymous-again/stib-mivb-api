@@ -1,7 +1,9 @@
+from flask import Flask
+app = Flask(__name__)
 
-if __name__ == '__main__' :
+@app.route("/")
+def hello():
+    return "Hello World!"
 
-    from eve import Eve
-
-    app = Eve()
+if __name__ == "__main__":
     app.run()
