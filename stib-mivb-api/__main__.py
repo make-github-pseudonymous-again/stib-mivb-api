@@ -220,62 +220,68 @@ def app_route_realtime_stop(id = None):
 
     max_requests = int(_max_requests)
 
-    for i in range( 1 , max_requests + 1 ) :
+    results = [ ]
 
-        url = REQUEST.format(id)
+    halts = _network['waiting'][id]
 
-        req = {
-            'url' : url ,
-            'date' : arrow.now(TZ).format( TIMEFMT )
-        }
+    for halt in halts :
 
-        requests.append(req)
+        for i in range( 1 , max_requests + 1 ) :
 
-        try :
+            url = REQUEST.format(halt)
 
-            _response = urllib.request.urlopen(url)
-            W = ElementTree.parse(_response).getroot()
-
-            now = arrow.now(TZ)
-
-            results = [ ]
-
-            for waitingtime in W.iter('waitingtime') :
-
-                w = {tag.tag: tag.text for tag in waitingtime}
-
-                minutes=int(w['minutes'])
-                when = now.replace(minutes=+minutes)
-
-                _when = when.format(TIMEFMT)
-
-                results.append({
-                    'stop' : id ,
-                    'line' : w['line'] ,
-                    'mode' : w['mode'] ,
-                    'when' : _when ,
-                    'destination' : w['destination'] ,
-                    'message' : w['message'] ,
-                    'minutes' : minutes
-                })
-
-            output['results'] = results
-
-            req['code'] = _response.getcode()
-
-            headers = {
-                'Cache-Control' :  'no-cache' ,
+            req = {
+                'url' : url ,
+                'date' : arrow.now(TZ).format( TIMEFMT )
             }
 
-            return postprocess( output , headers = headers )
+            requests.append(req)
 
-        except urllib.error.HTTPError as e :
+            try :
 
-            req['code'] = e.code
+                _response = urllib.request.urlopen(url)
+                req['code'] = _response.getcode()
 
-            if i == max_requests :
-                output = { 'message' : 'failed to download ' + url }
-                return postprocess( output , code = 503)
+                W = ElementTree.parse(_response).getroot()
+
+                now = arrow.now(TZ)
+
+                for waitingtime in W.iter('waitingtime') :
+
+                    w = {tag.tag: tag.text for tag in waitingtime}
+
+                    minutes=int(w['minutes'])
+                    when = now.replace(minutes=+minutes)
+
+                    _when = when.format(TIMEFMT)
+
+                    results.append({
+                        'stop' : id ,
+                        'line' : w['line'] ,
+                        'mode' : w['mode'] ,
+                        'when' : _when ,
+                        'destination' : w['destination'] ,
+                        'message' : w['message'] ,
+                        'minutes' : minutes
+                    })
+
+                break
+
+            except urllib.error.HTTPError as e :
+
+                req['code'] = e.code
+
+                if i == max_requests :
+                    output = { 'message' : 'failed to download ' + url }
+                    return postprocess( output , code = 503)
+
+    output['results'] = results
+    output['sources'] = { halt : REQUEST.format(halt) for halt in halts }
+
+    headers = { 'Cache-Control' :  'no-cache' }
+
+    return postprocess( output , headers = headers )
+
 
 if __name__ == "__main__":
     # Bind to PORT if defined, otherwise default to 5000.
