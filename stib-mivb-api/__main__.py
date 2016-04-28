@@ -284,6 +284,8 @@ def app_route_realtime_stop(id = None):
 
     output['results'] = results
     output['sources'] = { halt : REQUEST.format(halt) for halt in halts }
+    root = request.host_url.rstrip('/')
+    output['url'] = root + url_for('app_route_realtime_stop', id = id) ,
 
     headers = { 'Cache-Control' :  'no-cache' }
 
