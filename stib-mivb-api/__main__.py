@@ -49,7 +49,8 @@ def postprocess ( output , code = 200 , headers = None ) :
     if 'Cache-Control' in headers :
         if 'Last-Modified' not in headers :
             headers['Last-Modified'] = headers['Date']
-        headers['Age'] = int( ( date - arrow.get(headers['Last-Modified'][:-4] , HTTPDATEFMT ) ).total_seconds())
+        headers['Age'] = int( ( date - arrow.get(headers['Last-Modified'][5:-4]
+            , HTTPDATEFMT[5:] ) ).total_seconds())
 
     headers['X-RateLimit-Limit'] = '256'
     headers['X-RateLimit-Remaining'] = '255'
