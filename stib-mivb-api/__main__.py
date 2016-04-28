@@ -6,102 +6,279 @@ import arrow
 import urllib.request
 
 from xml.etree import ElementTree
-from flask import Flask
+from flask.ext.api import FlaskAPI
 from flask import request
+from flask import url_for
 from flask import Response
 
 TZ = 'Europe/Brussels'
 TIMEFMT = 'YYYY-MM-DDTHH:mm:ssZZ'
+HTTPDATEFMT = 'ddd, D MMM YYYY HH:mm:ss'
 
 log = lambda *x, **y: print(*x, **y, file=sys.stderr)
 
-app = Flask(__name__)
+NETWORK_URL = 'https://raw.githubusercontent.com/aureooms/stib-mivb-network/master/data.json'
+
+_network = {}
+_last_updated = 'never'
+_network_headers = { }
+
+def _update_network ( ) :
+
+    global _network, _last_updated , _network_headers
+    req = urllib.request.Request(NETWORK_URL)
+    req.add_header('Cache-Control', 'max-age=0')
+    _network = json.loads( urllib.request.urlopen( req ).read().decode() )
+    _last_updated = arrow.now(TZ).format(TIMEFMT)
+    creation = arrow.get(_network['creation'])
+    _network_headers = {
+        'Cache-Control' :  'public, max-age=60, s-maxage=60' ,
+        'Last-Modified' :  httpdatefmt(creation)
+    }
 
 def httpdatefmt ( t ) :
-    return t.to('GMT').format('ddd, D MMM YYYY HH:mm:ss') + ' GMT'
+    return t.to('GMT').format(HTTPDATEFMT) + ' GMT'
+
+def postprocess ( output , code = 200 , headers = None ) :
+
+    if headers is None : headers = { }
+
+    date = arrow.now(TZ)
+    headers['Date'] = httpdatefmt(date)
+
+    if 'Cache-Control' in headers :
+        if 'Last-Modified' not in headers :
+            headers['Last-Modified'] = headers['Date']
+        headers['Age'] = int( ( date - arrow.get(headers['Last-Modified'][:-4] , HTTPDATEFMT ) ).total_seconds())
+
+    headers['X-RateLimit-Limit'] = '256'
+    headers['X-RateLimit-Remaining'] = '255'
+    headers['X-RateLimit-Reset'] = '0'
+    headers['X-Poll-Interval'] = '0'
+
+    headers['X-Frame-Options'] = 'deny'
+    headers['X-Content-Type-Options'] = 'nosniff'
+    headers['X-Xss-Protection'] = '1; mode=block'
+    headers['Content-Security-Policy'] = "default-src 'self'"
+    headers['access-control-allow-origin'] = '*'
+    headers['strict-transport-security'] = 'max-age=31536000; includeSubdomains; preload'
+
+    headers['access-control-expose-headers'] = 'X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, X-Poll-Interval'
+
+    return output , code , headers
+
+
+app = FlaskAPI(__name__)
+
+app.config['DEFAULT_RENDERERS'] = [
+    'flask.ext.api.renderers.JSONRenderer',
+    'flask.ext.api.renderers.BrowsableAPIRenderer',
+]
 
 @app.route("/")
-def hello():
-    return "Hello World!"
+def app_route_root():
+    request_time = arrow.now(TZ)
+    root = request.host_url.rstrip('/')
+    return postprocess( {
+        'url' : root + url_for( 'app_route_root' ) ,
+        'links' : {
+            'network' : root + url_for( 'app_route_network' ) ,
+        } ,
+    } , headers = _network_headers )
 
-@app.route("/getwaitingtimes")
-def getwaitingtimes():
+@app.route('/network/', methods=['GET', 'PUT'])
+def app_route_network():
+    request_time = arrow.now(TZ)
+
+    if request.method == 'PUT' :
+
+        _update_network()
+
+    root = request.host_url.rstrip('/')
+
+    return postprocess( {
+        'url' : root + url_for( 'app_route_network' ) ,
+        'links' : {
+            'lines' : root + url_for( 'app_route_network_lines' ) ,
+        } ,
+        'last-updated' : _last_updated ,
+    } , headers = _network_headers )
+
+
+@app.route("/network/lines/")
+def app_route_network_lines():
+    request_time = arrow.now(TZ)
+
+    lines = { }
+
+    for id , data in _network['lines'].items() :
+        url = request.host_url.rstrip('/') + url_for('app_route_network_line', id=id)
+        line = {}
+        line['id'] = id
+        line['url'] = url
+        line['name'] = data['destination1'] + ' - ' + data['destination2']
+        line['mode'] = data['mode']
+        lines[id] = line
+
+    root = request.host_url.rstrip('/')
+    return postprocess( {
+        'url' : root + url_for( 'app_route_network_lines' ) ,
+        'lines' : lines ,
+    } , headers = _network_headers )
+
+@app.route("/network/line/<id>")
+def app_route_network_line(id):
+    request_time = arrow.now(TZ)
+    if id in _network['lines'] :
+        root = request.host_url.rstrip('/')
+        data = _network['lines'][id]
+        url = root + url_for('app_route_network_line', id=id)
+        line = { }
+        line['id'] = id
+        line['url'] = url
+        line['name'] = data['destination1'] + ' - ' + data['destination2']
+        line['mode'] = data['mode']
+        line['directions'] = {
+            data['destination1'] : root + url_for('app_route_network_direction', id=id, direction=1 ) ,
+            data['destination2'] : root + url_for('app_route_network_direction', id=id, direction=2 ) ,
+        }
+        return postprocess( line , headers = _network_headers )
+    else :
+        return postprocess( { 'message' : 'line does not exist' } , 404 )
+
+@app.route("/network/line/<id>/<direction>")
+def app_route_network_direction(id,direction):
+    request_time = arrow.now(TZ)
+    if id not in _network['itineraries'] or direction not in _network['itineraries'][id] :
+        return postprocess( { 'message' : 'itinerary does not exist' } , 404 )
+
+    itinerary = [ ]
+
+    for stopid in _network['itineraries'][id][direction] :
+
+        data = _network['stops'][stopid]
+
+        root = request.host_url.rstrip('/')
+
+        stop = {
+            'id' : stopid ,
+            'name' : data['name'] ,
+            'latitude' : data['latitude'] ,
+            'longitude' : data['longitude'] ,
+            'url' : root + url_for('app_route_network_stop', id = stopid)
+        }
+
+        itinerary.append(stop)
+
+    return postprocess( itinerary , headers = _network_headers )
+
+@app.route("/network/stop/<id>")
+def app_route_network_stop(id):
+    request_time = arrow.now(TZ)
+
+    if id not in _network['stops'] :
+        return postprocess( { 'message' : 'stop does not exist' } , 404 )
+
+    data = _network['stops'][id]
+
+    root = request.host_url.rstrip('/')
+
+    stop = {
+        'id' : id ,
+        'name' : data['name'] ,
+        'latitude' : data['latitude'] ,
+        'longitude' : data['longitude'] ,
+        'url' : root + url_for('app_route_network_stop', id = id) ,
+        'realtime' : {
+            'url' : root + url_for('app_route_realtime_stop', id = id) ,
+        } ,
+    }
+
+    return postprocess( stop , headers = _network_headers )
+
+
+@app.route("/realtime/stop/<id>")
+def app_route_realtime_stop(id = None):
 
     requests = [ ]
 
     REQUEST = 'http://m.stib.be/api/getwaitingtimes.php?halt={}'
 
-    halt = request.args.get('halt')
+    if id not in _network['stops'] :
+        output = { 'message' : 'incorrect id parameter' }
+        return postprocess( output , code = 400 )
 
-    url = REQUEST.format(halt)
+    _max_requests = request.args.get('max_requests','1')
 
-    log(url)
-    requests.append(url)
+    if any( map( lambda x : x < '0' or x > '9' , _max_requests ) ) :
+        output = { 'message' : 'incorrect max_requests parameter' }
+        return postprocess( output , code = 400 )
 
     output = {
-        'time-of-request' : arrow.now(TZ).format( TIMEFMT ) ,
-        'requests' : requests
+        'requests' : requests ,
     }
 
-    try:
+    max_requests = int(_max_requests)
 
-        W = ElementTree.parse(urllib.request.urlopen(url)).getroot()
+    for i in range( 1 , max_requests + 1 ) :
 
-        now = arrow.now(TZ)
+        url = REQUEST.format(id)
 
-        results = [ ]
+        req = {
+            'url' : url ,
+            'date' : arrow.now(TZ).format( TIMEFMT )
+        }
 
-        for waitingtime in W.iter('waitingtime') :
+        requests.append(req)
 
-            w = {tag.tag: tag.text for tag in waitingtime}
+        try :
 
-            when = now.replace(minutes=+int(w['minutes']))
+            _response = urllib.request.urlopen(url)
+            W = ElementTree.parse(_response).getroot()
 
-            _when = when.format(TIMEFMT)
+            now = arrow.now(TZ)
 
-            results.append({
-                'halt' : halt ,
-                'line' : w['line'] ,
-                'mode' : w['mode'] ,
-                'when' : _when ,
-                'destination' : w['destination'] ,
-                'message' : w['message'] ,
-                'minutes' : int(w['minutes'])
-            })
+            results = [ ]
 
-        output['results'] = results
+            for waitingtime in W.iter('waitingtime') :
 
-        response = Response(json.dumps( output ))
+                w = {tag.tag: tag.text for tag in waitingtime}
 
-    except urllib.error.HTTPError:
-        log('failed to download', url)
-        response = Response(json.dumps(output))
+                minutes=int(w['minutes'])
+                when = now.replace(minutes=+minutes)
 
-    response.headers['Cache-Control'] = 'no-cache'
-    response.headers['Age'] = 0
-    response.headers['Date'] = httpdatefmt(now)
-    response.headers['Last-Modified'] = httpdatefmt(now)
+                _when = when.format(TIMEFMT)
 
-    response.headers['Server'] = 'stib-mivb-api.herokuapp.com'
-    response.headers['Status'] = '200 OK'
+                results.append({
+                    'stop' : id ,
+                    'line' : w['line'] ,
+                    'mode' : w['mode'] ,
+                    'when' : _when ,
+                    'destination' : w['destination'] ,
+                    'message' : w['message'] ,
+                    'minutes' : minutes
+                })
 
-    response.headers['X-RateLimit-Limit'] = '256'
-    response.headers['X-RateLimit-Remaining'] = '255'
-    response.headers['X-RateLimit-Reset'] = '0'
-    response.headers['X-Poll-Interval'] = '0'
+            output['results'] = results
 
-    response.headers['X-Frame-Options'] = 'deny'
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['X-Xss-Protection'] = '1; mode=block'
-    response.headers['Content-Security-Policy'] = "default-src 'none'"
-    response.headers['access-control-allow-origin'] = '*'
-    response.headers['strict-transport-security'] = 'max-age=31536000; includeSubdomains; preload'
+            req['code'] = _response.getcode()
 
-    response.headers['access-control-expose-headers'] = 'X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, X-Poll-Interval'
+            headers = {
+                'Cache-Control' :  'no-cache' ,
+            }
 
-    return response
+            return postprocess( output , headers = headers )
+
+        except urllib.error.HTTPError as e :
+
+            req['code'] = e.code
+
+            if i == max_requests :
+                output = { 'message' : 'failed to download ' + url }
+                return postprocess( output , code = 503)
 
 if __name__ == "__main__":
     # Bind to PORT if defined, otherwise default to 5000.
+    _update_network()
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port, debug=True)
