@@ -152,7 +152,7 @@ def app_route_network_direction(id,direction):
     if id not in _network['itineraries'] or direction not in _network['itineraries'][id] :
         return postprocess( { 'message' : 'itinerary does not exist' } , 404 )
 
-    itinerary = [ ]
+    stops = [ ]
 
     for stopid in _network['itineraries'][id][direction] :
 
@@ -168,9 +168,15 @@ def app_route_network_direction(id,direction):
             'url' : root + url_for('app_route_network_stop', id = stopid)
         }
 
-        itinerary.append(stop)
+        stops.append(stop)
 
-    return postprocess( itinerary , headers = _network_headers )
+    output = {
+        'url' :  root + url_for('app_route_network_direction', id=id,
+            direction=direction) ,
+        'stops' : stops
+    }
+
+    return postprocess( output , headers = _network_headers )
 
 @app.route("/network/stop/<id>")
 def app_route_network_stop(id):
@@ -286,5 +292,7 @@ def app_route_realtime_stop(id = None):
 if __name__ == "__main__":
     # Bind to PORT if defined, otherwise default to 5000.
     _update_network()
+    host = '0.0.0.0'
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)
+    debug = os.environ.get('DEBUG', 'False') == 'True'
+    app.run(host=host, port=port, debug=debug)
