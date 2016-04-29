@@ -28,7 +28,7 @@ _network_headers = { }
 
 def _update_network ( ) :
 
-    global _network, _geojson, _last_updated , _network_headers
+    global _network, _geojson, _stops, _last_updated , _network_headers
     # retrieve network file
     req = urllib.request.Request(NETWORK_URL)
     req.add_header('Cache-Control', 'max-age=0')
@@ -38,6 +38,7 @@ def _update_network ( ) :
     req.add_header('Cache-Control', 'max-age=0')
     _geojson = json.loads( urllib.request.urlopen( req ).read().decode() )
     _stops = { f['properties']['stop_id'] : f for f in _geojson['features'] }
+
     _last_updated = arrow.now(TZ).format(TIMEFMT)
     creation = arrow.get(_network['creation'])
     _network_headers = {
@@ -110,6 +111,7 @@ def app_route_network():
         'url' : root + url_for( 'app_route_network' ) ,
         'links' : {
             'lines' : root + url_for( 'app_route_network_lines' ) ,
+            'stops' : root + url_for( 'app_route_network_stops' ) ,
         } ,
         'last-updated' : _last_updated ,
     } , headers = _network_headers )
@@ -178,9 +180,6 @@ def app_route_network_direction(id,direction):
             'url' : root + url_for('app_route_network_stop', id = stopid) ,
         }
 
-        if stopid in _stops :
-            stop['geojson'] = _stops[stopid]
-
         stops.append(stop)
 
     output = {
@@ -190,6 +189,11 @@ def app_route_network_direction(id,direction):
     }
 
     return postprocess( output , headers = _network_headers )
+
+@app.route('/network/stops//', defaults={'page': 1})
+@app.route('/network/stops/page/<int:page>')
+def app_route_network_stops(page):
+    return { 'message' : 'not implemented yet' } , 404
 
 @app.route("/network/stop/<id>")
 def app_route_network_stop(id):
@@ -211,12 +215,30 @@ def app_route_network_stop(id):
         'realtime' : {
             'url' : root + url_for('app_route_realtime_stop', id = id) ,
         } ,
+        'geojson' : {
+            'url' : root + url_for('app_route_geojson_stop', id = id) ,
+        } ,
     }
 
     if id in _stops :
-        stop['geojson'] = _stops[id]
+        if stop['latitude'] is None :
+            stop['latitude'] = _stop[id]['geometry']['coordinates'][1]
+        if stop['longitude'] is None :
+            stop['longitude'] = _stop[id]['geometry']['coordinates'][0]
 
     return postprocess( stop , headers = _network_headers )
+
+@app.route("/geojson/stop/<id>")
+def app_route_geojson_stop(id):
+    request_time = arrow.now(TZ)
+
+    if id not in _network['stops'] :
+        return postprocess( { 'message' : 'stop does not exist' } , 404 )
+
+    if id not in _stops :
+        return postprocess( { 'message' : 'no geojson data for this stop' } , 404 )
+
+    return postprocess( _stops[id] , headers = _network_headers )
 
 
 @app.route("/realtime/stop/<id>")
