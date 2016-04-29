@@ -246,6 +246,8 @@ def app_route_realtime_stop(id = None):
 
     halts = _network['waiting'][id]
 
+    sources = { halt : REQUEST.format(halt) for halt in halts }
+
     for halt in halts :
 
         for i in range( 1 , max_requests + 1 ) :
@@ -294,11 +296,15 @@ def app_route_realtime_stop(id = None):
                 req['code'] = e.code
 
                 if i == max_requests :
-                    output = { 'message' : 'failed to download ' + url }
+                    output = {
+                        'message' : 'failed to download ' + url ,
+                        'sources' : sources ,
+                        'requests' : requests
+                    }
                     return postprocess( output , code = 503)
 
     output['results'] = results
-    output['sources'] = { halt : REQUEST.format(halt) for halt in halts }
+    output['sources'] = sources
     root = request.host_url.rstrip('/')
     output['url'] = root + url_for('app_route_realtime_stop', id = id)
 
