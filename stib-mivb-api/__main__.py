@@ -18,17 +18,26 @@ HTTPDATEFMT = 'ddd, D MMM YYYY HH:mm:ss'
 log = lambda *x, **y: print(*x, **y, file=sys.stderr)
 
 NETWORK_URL = 'https://raw.githubusercontent.com/aureooms/stib-mivb-network/master/data.json'
+GEOJSON_URL = 'https://gist.githubusercontent.com/C4ptainCrunch/feff3569bc9a677932e61bca7bea5e4c/raw/9a51fdc4487b3827bf7b6fc6d3a199b333ca9c4f/stops.geojson'
 
 _network = {}
+_geojson = {}
+_stops = {}
 _last_updated = 'never'
 _network_headers = { }
 
 def _update_network ( ) :
 
-    global _network, _last_updated , _network_headers
+    global _network, _geojson, _last_updated , _network_headers
+    # retrieve network file
     req = urllib.request.Request(NETWORK_URL)
     req.add_header('Cache-Control', 'max-age=0')
     _network = json.loads( urllib.request.urlopen( req ).read().decode() )
+    # retrieve geojson file
+    req = urllib.request.Request(GEOJSON_URL)
+    req.add_header('Cache-Control', 'max-age=0')
+    _geojson = json.loads( urllib.request.urlopen( req ).read().decode() )
+    _stops = { f['properties']['stop_id'] : f for f in _geojson['features'] }
     _last_updated = arrow.now(TZ).format(TIMEFMT)
     creation = arrow.get(_network['creation'])
     _network_headers = {
@@ -166,7 +175,8 @@ def app_route_network_direction(id,direction):
             'name' : data['name'] ,
             'latitude' : data['latitude'] ,
             'longitude' : data['longitude'] ,
-            'url' : root + url_for('app_route_network_stop', id = stopid)
+            'url' : root + url_for('app_route_network_stop', id = stopid) ,
+            'geojson' : _stops[stopid] ,
         }
 
         stops.append(stop)
@@ -196,6 +206,7 @@ def app_route_network_stop(id):
         'latitude' : data['latitude'] ,
         'longitude' : data['longitude'] ,
         'url' : root + url_for('app_route_network_stop', id = id) ,
+        'geojson' : _stops[id] ,
         'realtime' : {
             'url' : root + url_for('app_route_realtime_stop', id = id) ,
         } ,
