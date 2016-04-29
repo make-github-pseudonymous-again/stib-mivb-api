@@ -176,8 +176,10 @@ def app_route_network_direction(id,direction):
             'latitude' : data['latitude'] ,
             'longitude' : data['longitude'] ,
             'url' : root + url_for('app_route_network_stop', id = stopid) ,
-            'geojson' : _stops[stopid] ,
         }
+
+        if stopid in _stops :
+            stop['geojson'] = _stops[stopid]
 
         stops.append(stop)
 
@@ -206,11 +208,13 @@ def app_route_network_stop(id):
         'latitude' : data['latitude'] ,
         'longitude' : data['longitude'] ,
         'url' : root + url_for('app_route_network_stop', id = id) ,
-        'geojson' : _stops[id] ,
         'realtime' : {
             'url' : root + url_for('app_route_realtime_stop', id = id) ,
         } ,
     }
+
+    if id in _stops :
+        stop['geojson'] = _stops[id]
 
     return postprocess( stop , headers = _network_headers )
 
