@@ -4,7 +4,8 @@ import sys
 import json
 import arrow
 import urllib.request
-
+import urllib.parse
+from collections import defaultdict
 from xml.etree import ElementTree
 from flask.ext.api import FlaskAPI
 from flask import request
@@ -23,22 +24,27 @@ GEOJSON_URL = 'https://gist.githubusercontent.com/C4ptainCrunch/feff3569bc9a6779
 _network = {}
 _geojson = {}
 _stops = {}
+_stops_index = defaultdict(list)
 _last_updated = 'never'
 _network_headers = { }
 
 def _update_network ( ) :
 
-    global _network, _geojson, _stops, _last_updated , _network_headers
+    global _network, _geojson, _stops, _stops_index, _last_updated , _network_headers
     # retrieve network file
     req = urllib.request.Request(NETWORK_URL)
     req.add_header('Cache-Control', 'max-age=0')
     _network = json.loads( urllib.request.urlopen( req ).read().decode() )
+    # build stops index
+    _stops_index = defaultdict(list)
+    for stop in _network['stops'].values() :
+        _stops_index[stop['name'].lower()].append(stop)
     # retrieve geojson file
     req = urllib.request.Request(GEOJSON_URL)
     req.add_header('Cache-Control', 'max-age=0')
     _geojson = json.loads( urllib.request.urlopen( req ).read().decode() )
     _stops = { f['properties']['stop_id'] : f for f in _geojson['features'] }
-
+    # update default headers
     _last_updated = arrow.now(TZ).format(TIMEFMT)
     creation = arrow.get(_network['creation'])
     _network_headers = {
@@ -88,7 +94,6 @@ app.config['DEFAULT_RENDERERS'] = [
 
 @app.route("/")
 def app_route_root():
-    request_time = arrow.now(TZ)
     root = request.host_url.rstrip('/')
     return postprocess( {
         'url' : root + url_for( 'app_route_root' ) ,
@@ -99,7 +104,6 @@ def app_route_root():
 
 @app.route('/network/', methods=['GET', 'PUT'])
 def app_route_network():
-    request_time = arrow.now(TZ)
 
     if request.method == 'PUT' :
 
@@ -119,7 +123,6 @@ def app_route_network():
 
 @app.route("/network/lines/")
 def app_route_network_lines():
-    request_time = arrow.now(TZ)
 
     lines = { }
 
@@ -140,7 +143,6 @@ def app_route_network_lines():
 
 @app.route("/network/line/<id>")
 def app_route_network_line(id):
-    request_time = arrow.now(TZ)
     if id in _network['lines'] :
         root = request.host_url.rstrip('/')
         data = _network['lines'][id]
@@ -160,7 +162,6 @@ def app_route_network_line(id):
 
 @app.route("/network/line/<id>/<direction>")
 def app_route_network_direction(id,direction):
-    request_time = arrow.now(TZ)
     if id not in _network['itineraries'] or direction not in _network['itineraries'][id] :
         return postprocess( { 'message' : 'itinerary does not exist' } , 404 )
 
@@ -185,19 +186,21 @@ def app_route_network_direction(id,direction):
     output = {
         'url' :  root + url_for('app_route_network_direction', id=id,
             direction=direction) ,
+        'line' : {
+            'url' : root + url_for('app_route_network_line', id=id )
+        } ,
         'stops' : stops
     }
 
     return postprocess( output , headers = _network_headers )
 
-@app.route('/network/stops//', defaults={'page': 1})
+@app.route('/network/stops/', defaults={'page': 1})
 @app.route('/network/stops/page/<int:page>')
 def app_route_network_stops(page):
     return { 'message' : 'not implemented yet' } , 404
 
 @app.route("/network/stop/<id>")
 def app_route_network_stop(id):
-    request_time = arrow.now(TZ)
 
     if id not in _network['stops'] :
         return postprocess( { 'message' : 'stop does not exist' } , 404 )
@@ -228,9 +231,51 @@ def app_route_network_stop(id):
 
     return postprocess( stop , headers = _network_headers )
 
+@app.route("/search/stop/")
+def app_route_search_stop():
+
+    q = request.args.get('query',None)
+
+    if q is None :
+        output = { 'message' : 'missing query argument' }
+        return postprocess( output , code = 400 )
+
+    root = request.host_url.rstrip('/')
+
+    args = { 'query' : q }
+
+    url = root + url_for('app_route_search_stop') + '?' + urllib.parse.urlencode(args)
+
+    results = []
+
+    for data in _stops_index[q.lower()] :
+
+        stop = {
+            'id' : data['id'] ,
+            'name' : data['name'] ,
+            'latitude' : data['latitude'] ,
+            'longitude' : data['longitude'] ,
+            'url' : root + url_for('app_route_network_stop', id = data['id'])
+        }
+
+        if id in _stops :
+            if stop['latitude'] is None :
+                stop['latitude'] = _stop[id]['geometry']['coordinates'][1]
+            if stop['longitude'] is None :
+                stop['longitude'] = _stop[id]['geometry']['coordinates'][0]
+
+        results.append( stop )
+
+    output = {
+        'url' : url ,
+        'query' : q ,
+        'results' : results ,
+    }
+
+    return postprocess( output , headers = _network_headers )
+
 @app.route("/geojson/stop/<id>")
 def app_route_geojson_stop(id):
-    request_time = arrow.now(TZ)
 
     if id not in _network['stops'] :
         return postprocess( { 'message' : 'stop does not exist' } , 404 )
