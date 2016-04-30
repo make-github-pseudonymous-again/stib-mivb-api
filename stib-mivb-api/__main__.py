@@ -25,20 +25,27 @@ _network = {}
 _geojson = {}
 _stops = {}
 _stops_index = defaultdict(list)
+_belongs_index = defaultdict(lambda : defaultdict(lambda : defaultdict(lambda :defaultdict( list ))))
 _last_updated = 'never'
 _network_headers = { }
 
 def _update_network ( ) :
 
-    global _network, _geojson, _stops, _stops_index, _last_updated , _network_headers
+    global _network, _geojson, _stops, _stops_index, _last_updated
+    global _belongs_index, _network_headers
     # retrieve network file
     req = urllib.request.Request(NETWORK_URL)
     req.add_header('Cache-Control', 'max-age=0')
     _network = json.loads( urllib.request.urlopen( req ).read().decode() )
     # build stops index
-    _stops_index = defaultdict(list)
+    _stops_index.clear()
     for stop in _network['stops'].values() :
         _stops_index[stop['name'].lower()].append(stop)
+    _belongs_index.clear()
+    for line , directions in _network['itineraries'].items() :
+        for direction , stops in directions.items() :
+            for i , stop in enumerate( stops ) :
+                _belongs_index[stop][line][direction]['positions'].append(i)
     # retrieve geojson file
     req = urllib.request.Request(GEOJSON_URL)
     req.add_header('Cache-Control', 'max-age=0')
@@ -221,6 +228,14 @@ def app_route_network_stop(id):
         'geojson' : {
             'url' : root + url_for('app_route_geojson_stop', id = id) ,
         } ,
+        'belongs' : {
+            l : {
+                d : {
+                    'url' : root + url_for('app_route_network_direction', id = l , direction=d ),
+                    'positions' : x['positions']
+                } for d , x in direction.items()
+            } for l , direction in _belongs_index[id].items()
+        }
     }
 
     if id in _stops :
