@@ -464,7 +464,7 @@ def app_route_realtime_closest(lat = None, lon = None):
     return postprocess( output , headers = HDYNAMIC )
 
 @app.route("/realtime/nclosest/<n>/<lat>/<lon>")
-def app_route_realtime_closest(n = None , lat = None, lon = None):
+def app_route_realtime_nclosest(n = None , lat = None, lon = None):
 
     try:
         n = int(n)
