@@ -320,8 +320,11 @@ def app_route_realtime_stop(id = None):
 
     max_requests = int(_max_requests)
 
-    return get_realtime_stop(id, max_requests, [])
+    output = get_realtime_stop(id, max_requests, [])
 
+    headers = { 'Cache-Control' :  'no-cache' }
+
+    return postprocess( output , headers = headers )
 
 def get_realtime_stop(id, max_requests, requests):
 
@@ -397,9 +400,7 @@ def get_realtime_stop(id, max_requests, requests):
     root = request.host_url.rstrip('/')
     output['url'] = root + url_for('app_route_realtime_stop', id = id)
 
-    headers = { 'Cache-Control' :  'no-cache' }
-
-    return postprocess( output , headers = headers )
+    return output
 
 def dist ( lat1 , lon1 , lat2 , lon2 , sqrt = math.sqrt, rad = math.radians, atan = math.atan2 , sin = math.sin , cos = math.cos ) :
 
@@ -421,13 +422,13 @@ def dist ( lat1 , lon1 , lat2 , lon2 , sqrt = math.sqrt, rad = math.radians, ata
 def app_route_realtime_closest(lat = None, lon = None):
 
     try:
-        lat = float(lat)
+        _lat = float(lat)
     except:
         output = { 'message' : 'incorrect lat parameter' }
         return postprocess( output , code = 400 )
 
     try:
-        lon = float(lon)
+        _lon = float(lon)
     except:
         output = { 'message' : 'incorrect lon parameter' }
         return postprocess( output , code = 400 )
@@ -442,14 +443,35 @@ def app_route_realtime_closest(lat = None, lon = None):
 
     def patcheddist ( a , b , c , d ) :
         if c is None or d is None :
-            return 2
+            return 2 # > 1
         else:
             return dist(a,b,c,d)
 
     # SLOW AND STUPID
-    id = min(_network['stops'].values(),key=lambda x : patcheddist(lat,lon,x['latitude'],x['longitude']))['id']
+    closeness = lambda x : patcheddist(_lat,_lon,x['latitude'],x['longitude'])
+    id = min(_network['stops'].values(),key=closeness)['id']
 
-    return get_realtime_stop(id,max_requests,[])
+    realtime = get_realtime_stop(id, max_requests, [])
+
+    data = _network['stops'][id]
+
+    stop = {
+        'id' : data['id'] ,
+        'name' : data['name'] ,
+        'latitude' : data['latitude'] ,
+        'longitude' : data['longitude'] ,
+        'url' : root + url_for('app_route_network_stop', id = data['id'])
+    }
+
+    output = {
+        "stop" : stop ,
+        "realtime" : realtime ,
+        "url" : root + url_for('app_route_realtime_closest', lat = lat , lon = lon )
+    }
+
+    headers = { 'Cache-Control' :  'no-cache' }
+
+    return postprocess( output , headers = headers )
 
 
 
