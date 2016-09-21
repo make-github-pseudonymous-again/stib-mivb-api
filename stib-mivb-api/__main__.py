@@ -446,7 +446,7 @@ def dist ( a , b , c , d ) :
     if c is None or d is None :
         return 2 # > 1
     else:
-        return dist(a,b,c,d)
+        return _dist(a,b,c,d)
 
 
 @app.route("/realtime/closest/<lat>/<lon>")
