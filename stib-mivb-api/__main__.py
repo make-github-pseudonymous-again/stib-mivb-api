@@ -10,7 +10,6 @@ import urllib.parse
 from collections import defaultdict
 from xml.etree import ElementTree
 from flask.ext.api import FlaskAPI
-from flask.ext.api.exceptions import APIException
 from flask import request
 from flask import url_for
 from flask import Response
@@ -35,7 +34,7 @@ _last_updated = 'never'
 HDYNAMIC = { 'Cache-Control' :  'no-cache' }
 HSTATIC = { }
 
-def Error ( APIException ) :
+class Error ( Exception ) :
 
     def __init__ ( self , message , code = 520 , details = None ) :
         self.message = message
@@ -53,7 +52,7 @@ def Error ( APIException ) :
             'details' : self.details ,
         }
 
-def MaxRequestsError ( Error ) :
+class MaxRequestsError ( Error ) :
     pass
 
 def _update_network ( ) :
