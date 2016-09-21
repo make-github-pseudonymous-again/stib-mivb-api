@@ -480,7 +480,7 @@ def app_route_realtime_nclosest(n = None , lat = None, lon = None):
     url = root + url_for('app_route_realtime_nclosest', n = n  , lat = lat , lon = lon )
     output = { 'stops' : stops , 'url' : url }
 
-    return postprocess( output , headers = headers )
+    return postprocess( output , headers = HDYNAMIC )
 
 
 def get_realtime_nclosest(lat, lon, n = 1):
