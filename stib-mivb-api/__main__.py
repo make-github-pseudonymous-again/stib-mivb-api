@@ -440,8 +440,14 @@ def app_route_realtime_closest(lat = None, lon = None):
 
     max_requests = int(_max_requests)
 
+    def patcheddist ( a , b , c , d ) :
+        if c is None or d is None :
+            return 2
+        else:
+            return dist(a,b,c,d)
+
     # SLOW AND STUPID
-    id = min(_network['stops'].values(),key=lambda x : dist(lat,lon,x['latitude'],x['longitude']))['id']
+    id = min(_network['stops'].values(),key=lambda x : patcheddist(lat,lon,x['latitude'],x['longitude']))['id']
 
     return get_realtime_stop(id,max_requests,[])
 
