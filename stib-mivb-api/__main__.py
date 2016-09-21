@@ -463,6 +463,7 @@ def app_route_realtime_closest(lat = None, lon = None):
         'url' : root + url_for('app_route_network_stop', id = data['id'])
     }
 
+    root = request.host_url.rstrip('/')
     output = {
         "stop" : stop ,
         "realtime" : realtime ,
