@@ -3,6 +3,7 @@ import os
 import sys
 import json
 import math
+import heapq
 import arrow
 import urllib.request
 import urllib.parse
@@ -16,6 +17,7 @@ from flask import Response
 TZ = 'Europe/Brussels'
 TIMEFMT = 'YYYY-MM-DDTHH:mm:ssZZ'
 HTTPDATEFMT = 'ddd, D MMM YYYY HH:mm:ss'
+DEFAULT_MAX_REQUESTS = '10'
 
 log = lambda *x, **y: print(*x, **y, file=sys.stderr)
 
@@ -28,12 +30,35 @@ _stops = {}
 _stops_index = defaultdict(list)
 _belongs_index = defaultdict(lambda : defaultdict(lambda : defaultdict(lambda :defaultdict( list ))))
 _last_updated = 'never'
-_network_headers = { }
+
+HDYNAMIC = { 'Cache-Control' :  'no-cache' }
+HSTATIC = { }
+
+def Error ( Exception ) :
+
+    def __init__ ( self , message , code = 520 , details = None ) :
+        self.message = message
+        self.code = code
+        self.details = { } if details is None else details
+
+    def postprocess ( self ) :
+        output = self.json()
+        return postprocess( output  , code = self.code )
+
+    def json ( self ) :
+        return {
+            'error' : self.code ,
+            'message' : self.message ,
+            'details' : self.details ,
+        }
+
+def MaxRequestsError ( Error ) :
+    pass
 
 def _update_network ( ) :
 
     global _network, _geojson, _stops, _stops_index, _last_updated
-    global _belongs_index, _network_headers
+    global _belongs_index, HSTATIC
     # retrieve network file
     req = urllib.request.Request(NETWORK_URL)
     req.add_header('Cache-Control', 'max-age=0')
@@ -70,7 +95,7 @@ def _update_network ( ) :
     # update default headers
     _last_updated = arrow.now(TZ).format(TIMEFMT)
     creation = arrow.get(_network['creation'])
-    _network_headers = {
+    HSTATIC = {
         'Cache-Control' :  'public, max-age=60, s-maxage=60' ,
         'Last-Modified' :  httpdatefmt(creation)
     }
@@ -123,7 +148,7 @@ def app_route_root():
         'links' : {
             'network' : root + url_for( 'app_route_network' ) ,
         } ,
-    } , headers = _network_headers )
+    } , headers = HSTATIC )
 
 @app.route('/network/', methods=['GET', 'PUT'])
 def app_route_network():
@@ -141,7 +166,7 @@ def app_route_network():
             'stops' : root + url_for( 'app_route_network_stops' ) ,
         } ,
         'last-updated' : _last_updated ,
-    } , headers = _network_headers )
+    } , headers = HSTATIC )
 
 
 @app.route("/network/lines/")
@@ -162,7 +187,7 @@ def app_route_network_lines():
     return postprocess( {
         'url' : root + url_for( 'app_route_network_lines' ) ,
         'lines' : lines ,
-    } , headers = _network_headers )
+    } , headers = HSTATIC )
 
 @app.route("/network/line/<id>")
 def app_route_network_line(id):
@@ -179,14 +204,14 @@ def app_route_network_line(id):
             data['destination1'] : root + url_for('app_route_network_direction', id=id, direction=1 ) ,
             data['destination2'] : root + url_for('app_route_network_direction', id=id, direction=2 ) ,
         }
-        return postprocess( line , headers = _network_headers )
+        return postprocess( line , headers = HSTATIC )
     else :
-        return postprocess( { 'message' : 'line does not exist' } , 404 )
+        return Error('line does not exist', code = 404 ).postprocess()
 
 @app.route("/network/line/<id>/<direction>")
 def app_route_network_direction(id,direction):
     if id not in _network['itineraries'] or direction not in _network['itineraries'][id] :
-        return postprocess( { 'message' : 'itinerary does not exist' } , 404 )
+        return Error( 'itinerary does not exist' , code = 404 ).postprocess()
 
     stops = [ ]
 
@@ -215,7 +240,7 @@ def app_route_network_direction(id,direction):
         'stops' : stops
     }
 
-    return postprocess( output , headers = _network_headers )
+    return postprocess( output , headers = HSTATIC )
 
 @app.route('/network/stops/', defaults={'page': 1})
 @app.route('/network/stops/page/<int:page>')
@@ -226,7 +251,7 @@ def app_route_network_stops(page):
 def app_route_network_stop(id):
 
     if id not in _network['stops'] :
-        return postprocess( { 'message' : 'stop does not exist' } , 404 )
+        return Error( 'stop does not exist' , code = 404 ).postprocess()
 
     data = _network['stops'][id]
 
@@ -254,7 +279,7 @@ def app_route_network_stop(id):
         }
     }
 
-    return postprocess( stop , headers = _network_headers )
+    return postprocess( stop , headers = HSTATIC )
 
 @app.route("/search/stop/")
 def app_route_search_stop():
@@ -262,8 +287,7 @@ def app_route_search_stop():
     q = request.args.get('query',None)
 
     if q is None :
-        output = { 'message' : 'missing query argument' }
-        return postprocess( output , code = 400 )
+        return Error( 'missing query argument' , code = 400 ).postprocess()
 
     root = request.host_url.rstrip('/')
 
@@ -291,40 +315,42 @@ def app_route_search_stop():
         'results' : results ,
     }
 
-    return postprocess( output , headers = _network_headers )
+    return postprocess( output , headers = HSTATIC )
 
 @app.route("/geojson/stop/<id>")
 def app_route_geojson_stop(id):
 
     if id not in _network['stops'] :
-        return postprocess( { 'message' : 'stop does not exist' } , 404 )
+        return Error( 'stop does not exist' , code = 404 ).postprocess()
 
     if id not in _stops :
-        return postprocess( { 'message' : 'no geojson data for this stop' } , 404 )
+        return Error( 'no geojson data for this stop' , code = 404 ).postprocess()
 
-    return postprocess( _stops[id] , headers = _network_headers )
+    return postprocess( _stops[id] , headers = HSTATIC )
 
 
 @app.route("/realtime/stop/<id>")
 def app_route_realtime_stop(id = None):
 
     if id not in _network['stops'] :
-        output = { 'message' : 'incorrect id parameter' }
-        return postprocess( output , code = 400 )
+        return Error( 'incorrect id parameter' , code = 400 ).postprocess()
 
-    _max_requests = request.args.get('max_requests','1')
+    _max_requests = request.args.get('max_requests',DEFAULT_MAX_REQUESTS)
 
-    if any( map( lambda x : x < '0' or x > '9' , _max_requests ) ) :
-        output = { 'message' : 'incorrect max_requests parameter' }
-        return postprocess( output , code = 400 )
+    try :
+        max_requests = int(_max_requests)
+    except:
+        return Error( 'incorrect max_requests parameter' , code = 400 ).postprocess()
 
-    max_requests = int(_max_requests)
+    if max_requests < 1 :
+        return Error( 'max_requests must be > 1' , code = 400 ).postprocess()
 
-    output = get_realtime_stop(id, max_requests, [])
+    try:
+        output = get_realtime_stop(id, max_requests, [])
+    except Error as e :
+        return e.postprocess()
 
-    headers = { 'Cache-Control' :  'no-cache' }
-
-    return postprocess( output , headers = headers )
+    return postprocess( output , headers = HDYNAMIC )
 
 def get_realtime_stop(id, max_requests, requests):
 
@@ -342,9 +368,14 @@ def get_realtime_stop(id, max_requests, requests):
 
     for halt in halts :
 
-        for i in range( 1 , max_requests + 1 ) :
+        url = REQUEST.format(halt)
 
-            url = REQUEST.format(halt)
+        for i in range( 0 , max_requests + 1 ) :
+
+            if i == max_requests :
+                msg = 'failed to download ' + url
+                details = { 'sources' : sources , 'requests' : requests }
+                raise MaxRequestsError( msg , code = 503 , details = details )
 
             req = {
                 'url' : url ,
@@ -387,13 +418,6 @@ def get_realtime_stop(id, max_requests, requests):
 
                 req['code'] = e.code
 
-                if i == max_requests :
-                    output = {
-                        'message' : 'failed to download ' + url ,
-                        'sources' : sources ,
-                        'requests' : requests
-                    }
-                    return postprocess( output , code = 503)
 
     output['results'] = results
     output['sources'] = sources
@@ -402,7 +426,7 @@ def get_realtime_stop(id, max_requests, requests):
 
     return output
 
-def dist ( lat1 , lon1 , lat2 , lon2 , sqrt = math.sqrt, rad = math.radians, atan = math.atan2 , sin = math.sin , cos = math.cos ) :
+def _dist ( lat1 , lon1 , lat2 , lon2 , sqrt = math.sqrt, rad = math.radians, atan = math.atan2 , sin = math.sin , cos = math.cos ) :
 
     """
 
@@ -418,62 +442,101 @@ def dist ( lat1 , lon1 , lat2 , lon2 , sqrt = math.sqrt, rad = math.radians, ata
     csscc = cos( a ) * sin( b ) - sin( a ) * cos( b ) * cos( dl )
     return atan(sqrt(cs**2 + csscc**2) , cds)
 
+def dist ( a , b , c , d ) :
+    if c is None or d is None :
+        return 2 # > 1
+    else:
+        return dist(a,b,c,d)
+
+
 @app.route("/realtime/closest/<lat>/<lon>")
 def app_route_realtime_closest(lat = None, lon = None):
 
     try:
+        stops = get_realtime_nclosest(lat, lon, n = 1)
+    except Error as e:
+        return e.postprocess()
+
+    root = request.host_url.rstrip('/')
+    url = root + url_for('app_route_realtime_closest', lat = lat , lon = lon )
+    output = { 'stop' : stops[0] , 'url' : url }
+
+    return postprocess( output , headers = HDYNAMIC )
+
+@app.route("/realtime/nclosest/<n>/<lat>/<lon>")
+def app_route_realtime_closest(n = None , lat = None, lon = None):
+
+    try:
+        n = int(n)
+    except:
+        return Error( 'incorrect n parameter' , code = 400 ).postprocess()
+
+    try:
+        stops = get_realtime_nclosest(lat, lon, n = n)
+    except Error as e:
+        return e.postprocess()
+
+    root = request.host_url.rstrip('/')
+    url = root + url_for('app_route_realtime_nclosest', n = n  , lat = lat , lon = lon )
+    output = { 'stops' : stops , 'url' : url }
+
+    return postprocess( output , headers = headers )
+
+
+def get_realtime_nclosest(lat, lon, n = 1):
+
+    try:
         _lat = float(lat)
     except:
-        output = { 'message' : 'incorrect lat parameter' }
-        return postprocess( output , code = 400 )
+        raise Error( 'incorrect lat parameter' , code = 400 )
 
     try:
         _lon = float(lon)
     except:
-        output = { 'message' : 'incorrect lon parameter' }
-        return postprocess( output , code = 400 )
+        raise Error( 'incorrect lon parameter' , code = 400 )
 
-    _max_requests = request.args.get('max_requests','1')
+    _max_requests = request.args.get('max_requests',DEFAULT_MAX_REQUESTS)
 
-    if any( map( lambda x : x < '0' or x > '9' , _max_requests ) ) :
-        output = { 'message' : 'incorrect max_requests parameter' }
-        return postprocess( output , code = 400 )
+    try :
+        max_requests = int(_max_requests)
+    except:
+        raise Error( 'incorrect max_requests parameter' , code = 400 )
 
-    max_requests = int(_max_requests)
-
-    def patcheddist ( a , b , c , d ) :
-        if c is None or d is None :
-            return 2 # > 1
-        else:
-            return dist(a,b,c,d)
+    if max_requests < 1 :
+        raise Error( 'max_requests must be > 1' , code = 400 )
 
     # SLOW AND STUPID
-    closeness = lambda x : patcheddist(_lat,_lon,x['latitude'],x['longitude'])
-    id = min(_network['stops'].values(),key=closeness)['id']
+    closeness = lambda x : dist(_lat,_lon,x['latitude'],x['longitude'])
+    nclosest = heapq.nsmallest(n,_network['stops'].values(),key=closeness)
 
-    realtime = get_realtime_stop(id, max_requests, [])
-
-    data = _network['stops'][id]
-
+    stops = []
     root = request.host_url.rstrip('/')
 
-    stop = {
-        'id' : data['id'] ,
-        'name' : data['name'] ,
-        'latitude' : data['latitude'] ,
-        'longitude' : data['longitude'] ,
-        'url' : root + url_for('app_route_network_stop', id = data['id'])
-    }
+    for data in nclosest :
 
-    output = {
-        "stop" : stop ,
-        "realtime" : realtime ,
-        "url" : root + url_for('app_route_realtime_closest', lat = lat , lon = lon )
-    }
+        id = data['id']
+        try:
+            realtime = get_realtime_stop(id, max_requests, [])
+            max_requests -= len(realtime['requests'])
+        except MaxRequestsError as e :
+            realtime = e.json()
+            max_requests = 0
 
-    headers = { 'Cache-Control' :  'no-cache' }
 
-    return postprocess( output , headers = headers )
+        root + url_for('app_route_realtime_closest', lat = lat , lon = lon )
+
+        stop = {
+            'id' : data['id'] ,
+            'name' : data['name'] ,
+            'latitude' : data['latitude'] ,
+            'longitude' : data['longitude'] ,
+            'url' : root + url_for('app_route_network_stop', id = data['id']) ,
+            'realtime' : realtime ,
+        }
+
+        stops.append(stop)
+
+    return stops
 
 
 
