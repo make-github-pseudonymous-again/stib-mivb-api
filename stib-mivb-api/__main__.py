@@ -52,6 +52,21 @@ def _update_network ( ) :
     req.add_header('Cache-Control', 'max-age=0')
     _geojson = json.loads( urllib.request.urlopen( req ).read().decode() )
     _stops = { f['properties']['stop_id'] : f for f in _geojson['features'] }
+
+    # patch coordinates
+    for id , stop in _network['stops'].items() :
+        if id in _stops :
+            if stop['latitude'] is None :
+                stop['latitude'] = _stops[id]['geometry']['coordinates'][1]
+            if stop['longitude'] is None :
+                stop['longitude'] = _stops[id]['geometry']['coordinates'][0]
+
+        if stop['latitude'] is not None :
+            stop['latitude'] = float(stop['latitude'])
+
+        if stop['longitude'] is not None :
+            stop['longitude'] = float(stop['longitude'])
+
     # update default headers
     _last_updated = arrow.now(TZ).format(TIMEFMT)
     creation = arrow.get(_network['creation'])
@@ -239,12 +254,6 @@ def app_route_network_stop(id):
         }
     }
 
-    if id in _stops :
-        if stop['latitude'] is None :
-            stop['latitude'] = _stop[id]['geometry']['coordinates'][1]
-        if stop['longitude'] is None :
-            stop['longitude'] = _stop[id]['geometry']['coordinates'][0]
-
     return postprocess( stop , headers = _network_headers )
 
 @app.route("/search/stop/")
@@ -273,12 +282,6 @@ def app_route_search_stop():
             'longitude' : data['longitude'] ,
             'url' : root + url_for('app_route_network_stop', id = data['id'])
         }
-
-        if id in _stops :
-            if stop['latitude'] is None :
-                stop['latitude'] = _stop[id]['geometry']['coordinates'][1]
-            if stop['longitude'] is None :
-                stop['longitude'] = _stop[id]['geometry']['coordinates'][0]
 
         results.append( stop )
 
