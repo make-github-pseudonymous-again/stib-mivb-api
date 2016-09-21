@@ -2,6 +2,7 @@
 import os
 import sys
 import json
+import math
 import arrow
 import urllib.request
 import urllib.parse
@@ -304,10 +305,6 @@ def app_route_geojson_stop(id):
 @app.route("/realtime/stop/<id>")
 def app_route_realtime_stop(id = None):
 
-    requests = [ ]
-
-    REQUEST = 'http://m.stib.be/api/getwaitingtimes.php?halt={}'
-
     if id not in _network['stops'] :
         output = { 'message' : 'incorrect id parameter' }
         return postprocess( output , code = 400 )
@@ -318,11 +315,18 @@ def app_route_realtime_stop(id = None):
         output = { 'message' : 'incorrect max_requests parameter' }
         return postprocess( output , code = 400 )
 
+    max_requests = int(_max_requests)
+
+    return get_realtime_stop(id, max_requests, [])
+
+
+def get_realtime_stop(id, max_requests, requests):
+
+    REQUEST = 'http://m.stib.be/api/getwaitingtimes.php?halt={}'
+
     output = {
         'requests' : requests ,
     }
-
-    max_requests = int(_max_requests)
 
     results = [ ]
 
@@ -393,6 +397,51 @@ def app_route_realtime_stop(id = None):
     headers = { 'Cache-Control' :  'no-cache' }
 
     return postprocess( output , headers = headers )
+
+def dist ( lat1 , lon1 , lat2 , lon2 , sqrt = math.sqrt, rad = math.radians, atan = math.atan2 , sin = math.sin , cos = math.cos ) :
+
+    """
+
+        Should be numerically stable according to wikipedia.
+        https://en.wikipedia.org/wiki/Great-circle_distance#Computational_formulas
+
+    """
+
+    a , b , x , y = map( rad, [lat1, lat2, lon1, lon2] )
+    dl = abs(x-y)
+    cds = sin(a) * sin(b) + cos(a) * cos(b) * cos(dl)
+    cs = cos( b ) * sin( dl )
+    csscc = cos( a ) * sin( b ) - sin( a ) * cos( b ) * cos( dl )
+    return atan(sqrt(cs**2 + csscc**2) , cds)
+
+@app.route("/realtime/closest/<lat>/<lon>")
+def app_route_realtime_closest(lat = None, lon = None):
+
+    try:
+        lat = float(lat)
+    except:
+        output = { 'message' : 'incorrect lat parameter' }
+        return postprocess( output , code = 400 )
+
+    try:
+        lon = float(lon)
+    except:
+        output = { 'message' : 'incorrect lon parameter' }
+        return postprocess( output , code = 400 )
+
+    _max_requests = request.args.get('max_requests','1')
+
+    if any( map( lambda x : x < '0' or x > '9' , _max_requests ) ) :
+        output = { 'message' : 'incorrect max_requests parameter' }
+        return postprocess( output , code = 400 )
+
+    max_requests = int(_max_requests)
+
+    # SLOW AND STUPID
+    id = min(_network['stops'],key=lambda x : dist(lat,lon,x['latitude'],x['longitude']))['id']
+
+    return get_realtime_stop(id,max_requests,[])
+
 
 
 if __name__ == "__main__":
