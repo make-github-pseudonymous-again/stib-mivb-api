@@ -204,6 +204,8 @@ def app_route_network_line(id):
             data['destination1'] : root + url_for('app_route_network_direction', id=id, direction=1 ) ,
             data['destination2'] : root + url_for('app_route_network_direction', id=id, direction=2 ) ,
         }
+        line['fgcolor'] = data['fgcolor']
+        line['bgcolor'] = data['bgcolor']
         return postprocess( line , headers = HSTATIC )
     else :
         return Error('line does not exist', code = 404 ).postprocess()
@@ -402,14 +404,19 @@ def get_realtime_stop(id, max_requests, requests):
 
                     _when = when.format(TIMEFMT)
 
+                    lineid = w['line']
+                    line = _network['lines'][lineid]
+
                     results.append({
                         'stop' : id ,
-                        'line' : w['line'] ,
+                        'line' : lineid ,
                         'mode' : w['mode'] ,
                         'when' : _when ,
                         'destination' : w['destination'] ,
                         'message' : w['message'] ,
-                        'minutes' : minutes
+                        'minutes' : minutes ,
+                        'fgcolor' : line['fgcolor'] ,
+                        'bgcolor' : line['bgcolor']
                     })
 
                 break
