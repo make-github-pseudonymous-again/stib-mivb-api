@@ -102,9 +102,9 @@ def _update_network ( ) :
 
 def get_line ( lineid ) :
 
-    if len(lineid) == 3 and lineid[0] == 2 :
+    if lineid[0] == 'N' :
         # Noctis
-        lineid = "N" + lineid[1:]
+        lineid = "2" + lineid[1:]
 
     if lineid in _network["lines"] :
         return _network["lines"][lineid]
@@ -421,8 +421,8 @@ def get_realtime_stop(id, max_requests, requests):
                         fgcolor = line['fgcolor']
                         bgcolor = line['bgcolor']
                     else:
-                        fgcolor = "#000000"
-                        bgcolor = "#FFFFFF"
+                        bgcolor = "#000000"
+                        fgcolor = "#FFFFFF"
 
                     results.append({
                         'stop' : id ,
