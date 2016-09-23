@@ -100,6 +100,17 @@ def _update_network ( ) :
         'Last-Modified' :  httpdatefmt(creation)
     }
 
+def get_line ( lineid ) :
+
+    if len(lineid) == 3 and lineid[0] == 2 :
+        # Noctis
+        lineid = "N" + lineid[1:]
+
+    if lineid in _network["lines"] :
+        return _network["lines"][lineid]
+
+    return None
+
 def httpdatefmt ( t ) :
     return t.to('GMT').format(HTTPDATEFMT) + ' GMT'
 
@@ -405,7 +416,13 @@ def get_realtime_stop(id, max_requests, requests):
                     _when = when.format(TIMEFMT)
 
                     lineid = w['line']
-                    line = _network['lines'][lineid]
+                    line = get_line( lineid )
+                    if line is not None :
+                        fgcolor = line['fgcolor']
+                        bgcolor = line['bgcolor']
+                    else:
+                        fgcolor = "#000000"
+                        bgcolor = "#FFFFFF"
 
                     results.append({
                         'stop' : id ,
@@ -415,8 +432,8 @@ def get_realtime_stop(id, max_requests, requests):
                         'destination' : w['destination'] ,
                         'message' : w['message'] ,
                         'minutes' : minutes ,
-                        'fgcolor' : line['fgcolor'] ,
-                        'bgcolor' : line['bgcolor']
+                        'fgcolor' : fgcolor ,
+                        'bgcolor' : bgcolor
                     })
 
                 break
