@@ -5,11 +5,12 @@ import json
 import math
 import heapq
 import arrow
+import concurrent.futures
 import urllib.request
 import urllib.parse
 from collections import defaultdict
 from xml.etree import ElementTree
-from flask.ext.api import FlaskAPI
+from flask_api import FlaskAPI
 from flask import request
 from flask import url_for
 from flask import Response
@@ -18,6 +19,9 @@ TZ = 'Europe/Brussels'
 TIMEFMT = 'YYYY-MM-DDTHH:mm:ssZZ'
 HTTPDATEFMT = 'ddd, D MMM YYYY HH:mm:ss'
 DEFAULT_MAX_REQUESTS = '10'
+MAX_MAX_REQUESTS = 10
+MAX_NCLOSEST = 30
+TIMEOUT = 5
 
 log = lambda *x, **y: print(*x, **y, file=sys.stderr)
 
@@ -34,7 +38,7 @@ _last_updated = 'never'
 HDYNAMIC = { 'Cache-Control' :  'no-cache' }
 HSTATIC = { }
 
-class Error ( Exception ) :
+class APIError ( Exception ) :
 
     def __init__ ( self , message , code = 520 , details = None ) :
         self.message = message
@@ -52,7 +56,7 @@ class Error ( Exception ) :
             'details' : self.details ,
         }
 
-class MaxRequestsError ( Error ) :
+class MaxRequestsError ( APIError ) :
     pass
 
 def _update_network ( ) :
@@ -147,8 +151,8 @@ def postprocess ( output , code = 200 , headers = None ) :
 app = FlaskAPI(__name__)
 
 app.config['DEFAULT_RENDERERS'] = [
-    'flask.ext.api.renderers.JSONRenderer',
-    'flask.ext.api.renderers.BrowsableAPIRenderer',
+    'flask_api.renderers.JSONRenderer',
+    'flask_api.renderers.BrowsableAPIRenderer',
 ]
 
 @app.route("/")
@@ -219,12 +223,12 @@ def app_route_network_line(id):
         line['bgcolor'] = data['bgcolor']
         return postprocess( line , headers = HSTATIC )
     else :
-        return Error('line does not exist', code = 404 ).postprocess()
+        return APIError('line does not exist', code = 404 ).postprocess()
 
 @app.route("/network/line/<id>/<direction>")
 def app_route_network_direction(id,direction):
     if id not in _network['itineraries'] or direction not in _network['itineraries'][id] :
-        return Error( 'itinerary does not exist' , code = 404 ).postprocess()
+        return APIError( 'itinerary does not exist' , code = 404 ).postprocess()
 
     stops = [ ]
 
@@ -264,7 +268,7 @@ def app_route_network_stops(page):
 def app_route_network_stop(id):
 
     if id not in _network['stops'] :
-        return Error( 'stop does not exist' , code = 404 ).postprocess()
+        return APIError( 'stop does not exist' , code = 404 ).postprocess()
 
     data = _network['stops'][id]
 
@@ -300,7 +304,7 @@ def app_route_search_stop():
     q = request.args.get('query',None)
 
     if q is None :
-        return Error( 'missing query argument' , code = 400 ).postprocess()
+        return APIError( 'missing query argument' , code = 400 ).postprocess()
 
     root = request.host_url.rstrip('/')
 
@@ -334,127 +338,217 @@ def app_route_search_stop():
 def app_route_geojson_stop(id):
 
     if id not in _network['stops'] :
-        return Error( 'stop does not exist' , code = 404 ).postprocess()
+        return APIError( 'stop does not exist' , code = 404 ).postprocess()
 
     if id not in _stops :
-        return Error( 'no geojson data for this stop' , code = 404 ).postprocess()
+        return APIError( 'no geojson data for this stop' , code = 404 ).postprocess()
 
     return postprocess( _stops[id] , headers = HSTATIC )
 
-
-@app.route("/realtime/stop/<id>")
-def app_route_realtime_stop(id = None):
-
-    if id not in _network['stops'] :
-        return Error( 'incorrect id parameter' , code = 400 ).postprocess()
+def get_max_requests ( request ) :
 
     _max_requests = request.args.get('max_requests',DEFAULT_MAX_REQUESTS)
 
     try :
         max_requests = int(_max_requests)
     except:
-        return Error( 'incorrect max_requests parameter' , code = 400 ).postprocess()
+        raise APIError( 'incorrect max_requests parameter' , code = 400 )
 
     if max_requests < 1 :
-        return Error( 'max_requests must be > 1' , code = 400 ).postprocess()
+        raise APIError( 'max_requests must be >= 1' , code = 400 )
+
+    if max_requests > MAX_MAX_REQUESTS :
+        raise APIError( 'max_requests must be <= {}'.format(MAX_MAX_REQUESTS) , code = 400 )
+
+    return max_requests
+
+
+@app.route("/realtime/stop/<id>")
+def app_route_realtime_stop(id = None):
+
+    if id not in _network['stops'] :
+        return APIError( 'incorrect id parameter' , code = 400 ).postprocess()
 
     try:
-        output = get_realtime_stop(id, max_requests, [])
-    except Error as e :
+        max_requests = get_max_requests( request )
+        _ , realtime = next(get_realtime_stops([id], max_requests))
+    except APIError as e :
         return e.postprocess()
 
-    return postprocess( output , headers = HDYNAMIC )
+    return postprocess( realtime , headers = HDYNAMIC )
 
-def get_realtime_stop(id, max_requests, requests):
+class LoadUrlResult ( object ) :
 
-    REQUEST = 'http://m.stib.be/api/getwaitingtimes.php?halt={}'
+    def __init__ ( self , data , date , requests ) :
 
-    output = {
-        'requests' : requests ,
-    }
+        self.data = data
+        self.date = date
+        self.requests = requests
 
-    results = [ ]
+class LoadUrlException ( Exception ) :
 
-    halts = _network['waiting'][id]
+    def __init__ ( self , date , requests ) :
 
-    sources = { halt : REQUEST.format(halt) for halt in halts }
+        self.date = date
+        self.requests = requests
 
-    for halt in halts :
+def load_url(url, max_requests = 1, timeout = 60) :
 
-        url = REQUEST.format(halt)
+    requests = []
 
-        for i in range( 0 , max_requests + 1 ) :
+    for i in range( max_requests ) :
 
-            if i == max_requests :
-                msg = 'failed to download ' + url
-                details = { 'sources' : sources , 'requests' : requests }
-                raise MaxRequestsError( msg , code = 503 , details = details )
+        req = {
+            'url' : url ,
+            'date' : arrow.now(TZ).format( TIMEFMT )
+        }
 
-            req = {
-                'url' : url ,
-                'date' : arrow.now(TZ).format( TIMEFMT )
-            }
+        requests.append( req )
 
-            requests.append(req)
+        try:
 
-            try :
+            with urllib.request.urlopen(url, timeout=timeout) as conn:
 
-                _response = urllib.request.urlopen(url)
-                req['code'] = _response.getcode()
-
-                W = ElementTree.parse(_response).getroot()
+                req['code'] = conn.getcode()
 
                 now = arrow.now(TZ)
 
-                for waitingtime in W.iter('waitingtime') :
+                tree = ElementTree.parse(conn).getroot()
 
-                    w = {tag.tag: tag.text for tag in waitingtime}
+                return LoadUrlResult( tree , now , requests )
 
-                    minutes=int(w['minutes'])
-                    when = now.replace(minutes=+minutes)
+        except urllib.error.HTTPError as e :
 
-                    _when = when.format(TIMEFMT)
+            req['code'] = e.code
 
-                    lineid = w['line']
-                    line = get_line( lineid )
-                    if line is not None :
-                        fgcolor = line['fgcolor']
-                        bgcolor = line['bgcolor']
-                    else:
-                        bgcolor = "#000000"
-                        fgcolor = "#FFFFFF"
+    now = arrow.now(TZ)
+    raise LoadUrlException( now , requests )
 
-                    results.append({
-                        'stop' : id ,
-                        'line' : lineid ,
-                        'mode' : w['mode'] ,
-                        'when' : _when ,
-                        'destination' : w['destination'] ,
-                        'message' : w['message'] ,
-                        'minutes' : minutes ,
-                        'fgcolor' : fgcolor ,
-                        'bgcolor' : bgcolor
-                    })
+def query_realtime_stops(ids, max_requests):
 
-                break
+    REQUEST = 'http://m.stib.be/api/getwaitingtimes.php?halt={}'
 
-            except urllib.error.HTTPError as e :
+    jobs = []
 
-                req['code'] = e.code
+    for id in ids :
+
+        halts = _network['waiting'][id]
+
+        for halt in halts :
+
+            url = REQUEST.format(halt)
+
+            key = ( id , halt , url )
+            fn = load_url
+            args = [ url ]
+            kwargs = {
+                'max_requests' : max_requests ,
+                'timeout' : TIMEOUT
+            }
+
+            jobs.append(( key , fn , args , kwargs ))
+
+    # We can use a with statement to ensure threads are cleaned up promptly
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(jobs)) as executor:
+        # Start the load operations and mark each future with its URL
+        batch = {
+            executor.submit(fn,*args,**kwargs) : key
+            for ( key , fn , args , kwargs ) in jobs
+        }
+
+        for future in concurrent.futures.as_completed(batch):
+
+            key = batch[future]
+
+            yield key , future
+
+def get_realtime_stops(ids, max_requests):
+
+    results = defaultdict(list)
+    sources = defaultdict(dict)
+    ok = { id : False for id in ids }
+
+    for key , future in query_realtime_stops( ids , max_requests ) :
+
+        id , halt , url = key
+
+        try:
+            result = future.result()
+
+        except LoadUrlException as e :
+            sources[id][halt] = {
+                'error' : True ,
+                'url' : url ,
+                'date' : e.date ,
+                'requests' : e.requests
+            }
+
+        else:
+
+            sources[id][halt] = {
+                'error' : False ,
+                'url' : url ,
+                'date' : result.date.format(TIMEFMT) ,
+                'requests' : result.requests
+            }
+
+            ok[id] = True
 
 
-    output['results'] = results
-    output['sources'] = sources
+            for waitingtime in result.data.iter('waitingtime') :
+
+                w = {tag.tag: tag.text for tag in waitingtime}
+
+                minutes = int(w['minutes'])
+                when = result.date.replace(minutes=+minutes)
+
+                _when = when.format(TIMEFMT)
+
+                lineid = w['line']
+                line = get_line( lineid )
+                if line is not None :
+                    fgcolor = line['fgcolor']
+                    bgcolor = line['bgcolor']
+                else:
+                    bgcolor = "#000000"
+                    fgcolor = "#FFFFFF"
+
+                results[id].append({
+                    'stop' : id ,
+                    'line' : lineid ,
+                    'mode' : w['mode'] ,
+                    'when' : _when ,
+                    'destination' : w['destination'] ,
+                    'message' : w['message'] ,
+                    'minutes' : minutes ,
+                    'fgcolor' : fgcolor ,
+                    'bgcolor' : bgcolor
+                })
+
+    if not any(ok.values()) :
+        msg = 'failed to fetch realtime'
+        raise MaxRequestError( msg , code = 503 , details = sources )
+
     root = request.host_url.rstrip('/')
-    output['url'] = root + url_for('app_route_realtime_stop', id = id)
 
-    return output
+    for id in ids :
+        if not ok[id] :
+            msg = 'failed to fetch realtime for {}'.format(id)
+            yield id , MaxRequestError( msg , code = 503 , details = sources[id] ).json()
+
+        else:
+            yield id , {
+                'url' : root + url_for('app_route_realtime_stop', id = id) ,
+                'sources' : sources[id] ,
+                'results' : results[id]
+            }
+
 
 def _dist ( lat1 , lon1 , lat2 , lon2 , sqrt = math.sqrt, rad = math.radians, atan = math.atan2 , sin = math.sin , cos = math.cos ) :
 
     """
 
-        Should be numerically stable according to wikipedia.
+        Numerically stable according to wikipedia.
         https://en.wikipedia.org/wiki/Great-circle_distance#Computational_formulas
 
     """
@@ -478,7 +572,7 @@ def app_route_realtime_closest(lat = None, lon = None):
 
     try:
         stops = get_realtime_nclosest(lat, lon, n = 1)
-    except Error as e:
+    except APIError as e:
         return e.postprocess()
 
     root = request.host_url.rstrip('/')
@@ -493,11 +587,14 @@ def app_route_realtime_nclosest(n = None , lat = None, lon = None):
     try:
         n = int(n)
     except:
-        return Error( 'incorrect n parameter' , code = 400 ).postprocess()
+        return APIError( 'incorrect n parameter' , code = 400 ).postprocess()
+
+    if n > MAX_NCLOSEST :
+        return APIError( 'n must be <= {}'.format( MAX_NCLOSEST ) , code = 400 ).postprocess()
 
     try:
         stops = get_realtime_nclosest(lat, lon, n = n)
-    except Error as e:
+    except APIError as e:
         return e.postprocess()
 
     root = request.host_url.rstrip('/')
@@ -512,22 +609,14 @@ def get_realtime_nclosest(lat, lon, n = 1):
     try:
         _lat = float(lat)
     except:
-        raise Error( 'incorrect lat parameter' , code = 400 )
+        raise APIError( 'incorrect lat parameter' , code = 400 )
 
     try:
         _lon = float(lon)
     except:
-        raise Error( 'incorrect lon parameter' , code = 400 )
+        raise APIError( 'incorrect lon parameter' , code = 400 )
 
-    _max_requests = request.args.get('max_requests',DEFAULT_MAX_REQUESTS)
-
-    try :
-        max_requests = int(_max_requests)
-    except:
-        raise Error( 'incorrect max_requests parameter' , code = 400 )
-
-    if max_requests < 1 :
-        raise Error( 'max_requests must be > 1' , code = 400 )
+    max_requests = get_max_requests( request )
 
     # SLOW AND STUPID
     closeness = lambda x : dist(_lat,_lon,x['latitude'],x['longitude'])
@@ -536,32 +625,26 @@ def get_realtime_nclosest(lat, lon, n = 1):
     stops = []
     root = request.host_url.rstrip('/')
 
-    for data in nclosest :
+    ids = [ stop['id'] for stop in nclosest ]
 
-        id = data['id']
-        try:
-            realtime = get_realtime_stop(id, max_requests, [])
-            max_requests -= len(realtime['requests'])
-        except MaxRequestsError as e :
-            realtime = e.json()
-            max_requests = 0
+    for id , realtime in get_realtime_stops(ids, max_requests):
 
+        data = _network['stops'][id]
 
         root + url_for('app_route_realtime_closest', lat = lat , lon = lon )
 
         stop = {
-            'id' : data['id'] ,
+            'id' : id ,
             'name' : data['name'] ,
             'latitude' : data['latitude'] ,
             'longitude' : data['longitude'] ,
-            'url' : root + url_for('app_route_network_stop', id = data['id']) ,
+            'url' : root + url_for('app_route_network_stop', id = id) ,
             'realtime' : realtime ,
         }
 
         stops.append(stop)
 
     return stops
-
 
 
 if __name__ == "__main__":
