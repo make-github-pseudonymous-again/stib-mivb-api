@@ -23,8 +23,6 @@ MAX_MAX_REQUESTS = 10
 MAX_NCLOSEST = 30
 TIMEOUT = 5
 
-log = lambda *x, **y: print(*x, **y, file=sys.stderr)
-
 NETWORK_URL = 'https://raw.githubusercontent.com/aureooms/stib-mivb-network/master/data.json'
 GEOJSON_URL = 'https://gist.githubusercontent.com/C4ptainCrunch/feff3569bc9a677932e61bca7bea5e4c/raw/9a51fdc4487b3827bf7b6fc6d3a199b333ca9c4f/stops.geojson'
 
@@ -106,6 +104,9 @@ def _update_network ( ) :
 
 def get_line ( lineid ) :
 
+    if lineid is None :
+        return None
+
     if lineid[0] == 'N' :
         # Noctis
         lineid = "2" + lineid[1:]
@@ -126,10 +127,13 @@ def postprocess ( output , code = 200 , headers = None ) :
     headers['Date'] = httpdatefmt(date)
 
     if 'Cache-Control' in headers :
-        if 'Last-Modified' not in headers :
+
+        if headers['Cache-Control'] == 'no-cache' or 'Last-Modified' not in headers :
             headers['Last-Modified'] = headers['Date']
-        headers['Age'] = int( ( date - arrow.get(headers['Last-Modified'][5:-4]
-            , HTTPDATEFMT[5:] ) ).total_seconds())
+
+        last_modified = arrow.get(headers['Last-Modified'][5:-4] , HTTPDATEFMT[5:] )
+
+        headers['Age'] = int( ( date - last_modified ).total_seconds( ) )
 
     headers['X-RateLimit-Limit'] = '256'
     headers['X-RateLimit-Remaining'] = '255'
@@ -497,33 +501,46 @@ def get_realtime_stops(ids, max_requests):
 
             for waitingtime in result.data.iter('waitingtime') :
 
-                w = {tag.tag: tag.text for tag in waitingtime}
+                try:
 
-                minutes = int(w['minutes'])
-                when = result.date.replace(minutes=+minutes)
+                    w = {tag.tag: tag.text for tag in waitingtime}
 
-                _when = when.format(TIMEFMT)
+                    minutes = int(w['minutes'])
+                    mode = w['mode']
+                    destination = w['destination']
+                    message = w['message']
+                    lineid = w['line']
 
-                lineid = w['line']
-                line = get_line( lineid )
-                if line is not None :
-                    fgcolor = line['fgcolor']
-                    bgcolor = line['bgcolor']
+                except Exception as e:
+
+                    app.logger.warning( e )
+                    app.logger.warning( "couldn't parse waitingtime" )
+
                 else:
-                    bgcolor = "#000000"
-                    fgcolor = "#FFFFFF"
 
-                results[id].append({
-                    'stop' : id ,
-                    'line' : lineid ,
-                    'mode' : w['mode'] ,
-                    'when' : _when ,
-                    'destination' : w['destination'] ,
-                    'message' : w['message'] ,
-                    'minutes' : minutes ,
-                    'fgcolor' : fgcolor ,
-                    'bgcolor' : bgcolor
-                })
+                    when = result.date.replace(minutes=+minutes)
+
+                    _when = when.format(TIMEFMT)
+
+                    line = get_line( lineid )
+                    if line is not None :
+                        fgcolor = line['fgcolor']
+                        bgcolor = line['bgcolor']
+                    else:
+                        bgcolor = "#000000"
+                        fgcolor = "#FFFFFF"
+
+                    results[id].append({
+                        'stop' : id ,
+                        'line' : lineid ,
+                        'mode' : mode ,
+                        'when' : _when ,
+                        'destination' : destination ,
+                        'message' : message ,
+                        'minutes' : minutes ,
+                        'fgcolor' : fgcolor ,
+                        'bgcolor' : bgcolor
+                    })
 
     if not any(ok.values()) :
         msg = 'failed to fetch realtime'
@@ -648,10 +665,12 @@ def get_realtime_nclosest(lat, lon, n = 1):
 
 
 if __name__ == "__main__":
+
+    # debug = os.environ.get('DEBUG', 'False') == 'True'
+    debug = True
+
     # Bind to PORT if defined, otherwise default to 5000.
     _update_network()
     host = '0.0.0.0'
     port = int(os.environ.get('PORT', 5000))
-    # debug = os.environ.get('DEBUG', 'False') == 'True'
-    debug = True
     app.run(host=host, port=port, debug=debug)
