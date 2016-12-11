@@ -166,6 +166,7 @@ def app_route_root():
         'url' : root + url_for( 'app_route_root' ) ,
         'links' : {
             'network' : root + url_for( 'app_route_network' ) ,
+            'control' : root + url_for( 'app_route_control' ) ,
         } ,
     } , headers = HSTATIC )
 
@@ -396,7 +397,7 @@ class LoadUrlException ( Exception ) :
         self.date = date
         self.requests = requests
 
-def load_url(url, max_requests = 1, timeout = 60) :
+def load_url(parse, url, max_requests = 1, timeout = 60) :
 
     requests = []
 
@@ -417,9 +418,9 @@ def load_url(url, max_requests = 1, timeout = 60) :
 
                 now = arrow.now(TZ)
 
-                tree = ElementTree.parse(conn).getroot()
+                data = parse(conn)
 
-                return LoadUrlResult( tree , now , requests )
+                return LoadUrlResult( data , now , requests )
 
         except urllib.error.HTTPError as e :
 
@@ -444,7 +445,8 @@ def query_realtime_stops(ids, max_requests):
 
             key = ( id , halt , url )
             fn = load_url
-            args = [ url ]
+            parse = lambda conn : ElementTree.parse(conn).getroot()
+            args = [ parse, url ]
             kwargs = {
                 'max_requests' : max_requests ,
                 'timeout' : TIMEOUT
@@ -483,7 +485,7 @@ def get_realtime_stops(ids, max_requests):
             sources[id][halt] = {
                 'error' : True ,
                 'url' : url ,
-                'date' : e.date ,
+                'date' : e.date.format(TIMEFMT) ,
                 'requests' : e.requests
             }
 
@@ -597,6 +599,109 @@ def app_route_realtime_closest(lat = None, lon = None):
     output = { 'stop' : stops[0] , 'url' : url }
 
     return postprocess( output , headers = HDYNAMIC )
+
+@app.route("/control")
+def app_route_control():
+    root = request.host_url.rstrip('/')
+    return postprocess( {
+        'url' : root + url_for( 'app_route_control' ) ,
+        'links' : {
+            'lines' : root + url_for( 'app_route_control_lines' ) ,
+            'controls' : root + url_for( 'app_route_control_controls' ) ,
+        } ,
+    } , headers = HSTATIC )
+
+@app.route("/control/lines")
+def app_route_control_lines():
+
+    max_requests = get_max_requests( request )
+
+    REQUEST = 'http://54.229.32.209:8090/lines'
+
+    try:
+
+        result = load_url( json.load , REQUEST ,
+                max_requests = max_requests , timeout = TIMEOUT )
+
+    except LoadUrlException as e :
+
+        sources = {}
+        sources[REQUEST] = {
+            'error' : True ,
+            'url' : REQUEST ,
+            'date' : e.date.format(TIMEFMT) ,
+            'requests' : e.requests
+        }
+
+        msg = 'failed to fetch control lines'
+        raise MaxRequestError( msg , code = 503 , details = sources )
+
+    else:
+
+        sources = {}
+        sources[REQUEST] = {
+            'error' : False ,
+            'url' : REQUEST ,
+            'date' : result.date.format(TIMEFMT) ,
+            'requests' : result.requests
+        }
+
+        root = request.host_url.rstrip('/')
+
+        output = {
+            'url' : root + url_for('app_route_control_lines') ,
+            'sources' : sources ,
+            'data' : result.data ,
+        }
+
+        return postprocess( output , headers = HDYNAMIC )
+
+
+@app.route("/control/last")
+def app_route_control_last():
+
+    max_requests = get_max_requests( request )
+
+    REQUEST = 'http://54.229.32.209:8090/controls'
+
+    try:
+
+        result = load_url( json.load , REQUEST ,
+                max_requests = max_requests , timeout = TIMEOUT )
+
+    except LoadUrlException as e :
+
+        sources = {}
+        sources[REQUEST] = {
+            'error' : True ,
+            'url' : REQUEST ,
+            'date' : e.date.format(TIMEFMT) ,
+            'requests' : e.requests
+        }
+
+        msg = 'failed to fetch last controls'
+        raise MaxRequestError( msg , code = 503 , details = sources )
+
+    else:
+
+        sources = {}
+        sources[REQUEST] = {
+            'error' : False ,
+            'url' : REQUEST ,
+            'date' : result.date.format(TIMEFMT) ,
+            'requests' : result.requests
+        }
+
+        root = request.host_url.rstrip('/')
+
+        output = {
+            'url' : root + url_for('app_route_control_lines') ,
+            'sources' : sources ,
+            'data' : result.data ,
+        }
+
+        return postprocess( output , headers = HDYNAMIC )
+
 
 @app.route("/realtime/nclosest/<n>/<lat>/<lon>")
 def app_route_realtime_nclosest(n = None , lat = None, lon = None):
