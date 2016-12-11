@@ -607,7 +607,7 @@ def app_route_control():
         'url' : root + url_for( 'app_route_control' ) ,
         'links' : {
             'lines' : root + url_for( 'app_route_control_lines' ) ,
-            'controls' : root + url_for( 'app_route_control_controls' ) ,
+            'last' : root + url_for( 'app_route_control_last' ) ,
         } ,
     } , headers = HSTATIC )
 
@@ -620,8 +620,11 @@ def app_route_control_lines():
 
     try:
 
-        result = load_url( json.load , REQUEST ,
-                max_requests = max_requests , timeout = TIMEOUT )
+        result = load_url(
+                lambda conn: json.loads(conn.read().decode()) ,
+                REQUEST ,
+                max_requests = max_requests ,
+                timeout = TIMEOUT )
 
     except LoadUrlException as e :
 
@@ -666,8 +669,11 @@ def app_route_control_last():
 
     try:
 
-        result = load_url( json.load , REQUEST ,
-                max_requests = max_requests , timeout = TIMEOUT )
+        result = load_url(
+                lambda conn: json.loads(conn.read().decode()) ,
+                REQUEST ,
+                max_requests = max_requests ,
+                timeout = TIMEOUT )
 
     except LoadUrlException as e :
 
