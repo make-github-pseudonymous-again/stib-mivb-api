@@ -709,6 +709,14 @@ def app_route_control_last():
         return postprocess( output , headers = HDYNAMIC )
 
 
+@app.route("/control/new/<id>")
+def app_route_control_new(id = None):
+
+    # POST there with { 'stopId' : 'blah' }
+    # stop ids must be fetched via
+    # http://54.229.32.209:8090/stops?lineId=bleh
+    REQUEST = 'http://54.229.32.209:8090/controls'
+
 @app.route("/realtime/nclosest/<n>/<lat>/<lon>")
 def app_route_realtime_nclosest(n = None , lat = None, lon = None):
 
