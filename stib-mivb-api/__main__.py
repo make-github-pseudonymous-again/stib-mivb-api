@@ -755,7 +755,7 @@ def get_realtime_nclosest(lat, lon, n = 1):
     root = request.host_url.rstrip('/')
 
     # TODO find a better representative id than [0] (maybe the closest in the list?)
-    queries = [ (_stops_index[name][0], _stops_index[name]) for name in nclosest]
+    queries = [ (_stops_index[name][0]['id'], [ x['id'] for x in _stops_index[name] ]) for name in nclosest]
 
     for id , realtime in get_realtime_stops(queries, max_requests):
 
