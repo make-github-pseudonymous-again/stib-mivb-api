@@ -548,6 +548,9 @@ def get_realtime_stops(queries, max_requests):
 
     root = request.host_url.rstrip('/')
 
+    for result in results.values():
+        result.sort(key = lambda x : x['when'])
+
     for id, _ in queries :
         if not ok[id] :
             msg = 'failed to fetch realtime for {}'.format(id)
