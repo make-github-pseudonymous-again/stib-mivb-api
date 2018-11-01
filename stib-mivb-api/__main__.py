@@ -748,8 +748,7 @@ def get_realtime_nclosest(lat, lon, n = 1):
 
     # SLOW AND STUPID
     localdist = lambda stop : dist(_lat,_lon,stop['latitude'],stop['longitude'])
-    bylocaldist = lambda stopid : localdist(_network['stops'][stopid])
-    closeness = lambda name : min(map(bylocaldist, _stops_index[name]))
+    closeness = lambda name : min(map(localdist, _stops_index[name]))
     nclosest = heapq.nsmallest(n,_stops_index.keys(),key=closeness)
 
     stops = []
