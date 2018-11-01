@@ -376,7 +376,9 @@ def app_route_realtime_stop(id = None):
 
     try:
         max_requests = get_max_requests( request )
-        _ , realtime = next(get_realtime_stops([id], max_requests))
+        halts = _network['waiting'][id]
+        query = ( id, halts )
+        _ , realtime = next(get_realtime_stops([query], max_requests))
     except APIError as e :
         return e.postprocess()
 
@@ -429,15 +431,13 @@ def load_url(parse, url, max_requests = 1, timeout = 60) :
     now = arrow.now(TZ)
     raise LoadUrlException( now , requests )
 
-def query_realtime_stops(ids, max_requests):
+def query_realtime_stops(queries, max_requests):
 
     REQUEST = 'http://m.stib.be/api/getwaitingtimes.php?halt={}'
 
     jobs = []
 
-    for id in ids :
-
-        halts = _network['waiting'][id]
+    for id, halts in queries :
 
         for halt in halts :
 
@@ -468,13 +468,13 @@ def query_realtime_stops(ids, max_requests):
 
             yield key , future
 
-def get_realtime_stops(ids, max_requests):
+def get_realtime_stops(queries, max_requests):
 
     results = defaultdict(list)
     sources = defaultdict(dict)
-    ok = { id : False for id in ids }
+    ok = { id : False for id, _ in queries }
 
-    for key , future in query_realtime_stops( ids , max_requests ) :
+    for key , future in query_realtime_stops( queries , max_requests ) :
 
         id , halt , url = key
 
@@ -550,7 +550,7 @@ def get_realtime_stops(ids, max_requests):
 
     root = request.host_url.rstrip('/')
 
-    for id in ids :
+    for id, _ in queries :
         if not ok[id] :
             msg = 'failed to fetch realtime for {}'.format(id)
             yield id , MaxRequestError( msg , code = 503 , details = sources[id] ).json()
@@ -747,15 +747,18 @@ def get_realtime_nclosest(lat, lon, n = 1):
     max_requests = get_max_requests( request )
 
     # SLOW AND STUPID
-    closeness = lambda x : dist(_lat,_lon,x['latitude'],x['longitude'])
-    nclosest = heapq.nsmallest(n,_network['stops'].values(),key=closeness)
+    localdist = lambda stop : dist(_lat,_lon,stop['latitude'],stop['longitude'])
+    bylocaldist = lambda stopid : localdist(_network['stops'][stopid])
+    closeness = lambda name : min(map(bylocaldist, _stops_index[name]))
+    nclosest = heapq.nsmallest(n,_stops_index.keys(),key=closeness)
 
     stops = []
     root = request.host_url.rstrip('/')
 
-    ids = [ stop['id'] for stop in nclosest ]
+    # TODO find a better representative id than [0] (maybe the closest in the list?)
+    queries = [ (_stops_index[name][0], _stops_index[name]) for name in nclosest]
 
-    for id , realtime in get_realtime_stops(ids, max_requests):
+    for id , realtime in get_realtime_stops(queries, max_requests):
 
         data = _network['stops'][id]
 
