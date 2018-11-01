@@ -520,9 +520,7 @@ def get_realtime_stops(queries, max_requests):
 
                 else:
 
-                    when = result.date.replace(minutes=+minutes)
-
-                    _when = when.format(TIMEFMT)
+                    when = result.date.replace(minutes=+minutes).format(TIMEFMT)
 
                     line = get_line( lineid )
                     if line is not None :
@@ -536,7 +534,7 @@ def get_realtime_stops(queries, max_requests):
                         'stop' : id ,
                         'line' : lineid ,
                         'mode' : mode ,
-                        'when' : _when ,
+                        'when' : when ,
                         'destination' : destination ,
                         'message' : message ,
                         'minutes' : minutes ,
